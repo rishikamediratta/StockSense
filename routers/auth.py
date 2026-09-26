@@ -1,3 +1,6 @@
+import random
+from datetime import datetime, timedelta
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
@@ -40,3 +43,51 @@ def login(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
 @router.get("/me", response_model=schemas.UserOut)
 def me(user: models.User = Depends(get_current_user)):
     return user
+
+
+@router.post("/forgot-password/request", response_model=schemas.MessageResponse)
+def forgot_password_request(payload: schemas.PasswordResetRequest, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.email == payload.email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Email not found")
+
+    otp = f"{random.randint(100000, 999999)}"
+    user.reset_otp = hash_password(otp)
+    user.reset_otp_expires_at = datetime.utcnow() + timedelta(minutes=10)
+    db.commit()
+    return {"message": "Verification code has been sent", "otp": otp}
+
+
+@router.post("/forgot-password/verify", response_model=schemas.MessageResponse)
+def forgot_password_verify(payload: schemas.PasswordResetVerify, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.email == payload.email).first()
+    if not user or not user.reset_otp:
+        raise HTTPException(status_code=400, detail="No password reset requested")
+
+    if user.reset_otp_expires_at and user.reset_otp_expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Verification code expired")
+
+    if not verify_password(payload.otp, user.reset_otp):
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+
+    return {"message": "OTP verified successfully"}
+
+
+@router.post("/forgot-password/confirm", response_model=schemas.MessageResponse)
+def forgot_password_confirm(payload: schemas.PasswordResetConfirm, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.email == payload.email).first()
+    if not user or not user.reset_otp:
+        raise HTTPException(status_code=400, detail="No password reset requested")
+
+    if user.reset_otp_expires_at and user.reset_otp_expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Verification code expired")
+
+    if not verify_password(payload.otp, user.reset_otp):
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+
+    user.password_hash = hash_password(payload.new_password)
+    user.reset_otp = None
+    user.reset_otp_expires_at = None
+    db.commit()
+    return {"message": "Password reset complete. You can now sign in."}
+

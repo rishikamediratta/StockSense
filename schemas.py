@@ -50,6 +50,38 @@ class UserOut(BaseModel):
         from_attributes = True
 
 
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetVerify(BaseModel):
+    email: EmailStr
+    otp: str
+
+
+class PasswordResetConfirm(BaseModel):
+    email: EmailStr
+    otp: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def password_strength(cls, v):
+        if len(v) <= 8:
+            raise ValueError("Password must be more than 8 characters")
+        if not any(c.isupper() for c in v) or not any(c.islower() for c in v):
+            raise ValueError("Password must contain upper and lower case letters")
+        if not any(not c.isalnum() for c in v):
+            raise ValueError("Password must contain a special character")
+        return v
+
+
+class MessageResponse(BaseModel):
+    message: str
+    otp: str | None = None
+
+
+
 # ---------- Product ----------
 class ProductCreate(BaseModel):
     code: str

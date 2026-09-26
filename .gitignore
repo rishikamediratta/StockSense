@@ -1,3 +1,4 @@
+
 # Dependencies
 node_modules/
 dist/
@@ -16,6 +17,7 @@ backend/venv/
 # Python
 __pycache__/
 *.py[cod]
+.pytest_cache/
 
 # Database
 *.db
