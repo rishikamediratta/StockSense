@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import Base, engine
-from routers import auth, products, warehouses, receipts, deliveries, moves, dashboard
+from routers import auth, products, warehouses, receipts, deliveries, moves, dashboard, ai
 
 Base.metadata.create_all(bind=engine)
 
@@ -23,6 +23,7 @@ app.include_router(receipts.router)
 app.include_router(deliveries.router)
 app.include_router(moves.router)
 app.include_router(dashboard.router)
+app.include_router(ai.router)
 
 
 @app.get("/")
