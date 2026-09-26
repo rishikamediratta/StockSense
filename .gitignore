@@ -1,3 +1,25 @@
+# Environment variables
+.env
+backend/.env
+
+# Virtual environment
+venv/
+backend/venv/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
 node_modules/
 dist/
 .upm/
