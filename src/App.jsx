@@ -8,6 +8,7 @@ import {
   ArrowUpFromLine,
   BarChart3,
   Bell,
+  BrainCircuit,
   Boxes,
   Building2,
   CalendarDays,
@@ -29,6 +30,7 @@ import {
   PackageCheck,
   Plus,
   Search,
+  Sparkles,
   Settings,
   SlidersHorizontal,
   Truck,
@@ -37,7 +39,8 @@ import {
   X,
 } from "lucide-react";
 import { Link, Navigate, Outlet, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
-import { authApi, inventoryApi } from "./api";
+import { aiApi, authApi, inventoryApi } from "./api";
+import { generateDashboardInsights } from "./aiEngine.js";
 
 
 const today = new Date().toISOString().slice(0, 10);
@@ -414,6 +417,7 @@ function ForgotPassword() {
 function AppShell({ state, logout, apiError }) {
   const [open, setOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
   const location = useLocation();
   const nav = useNavigate();
   useEffect(() => setOpen(false), [location.pathname]);
@@ -444,7 +448,8 @@ function AppShell({ state, logout, apiError }) {
           <button className="logout-link" onClick={goLogout}><LogOut size={16} /> Logout</button>
         </div>
       </aside>
-      <main className="main-content"><OutletHeader state={state} notificationsOpen={notificationsOpen} onToggleNotifications={() => setNotificationsOpen((current) => !current)} />{apiError && <div className="notice warning" role="alert"><AlertTriangle size={17} />{apiError}</div>}<Outlet /></main>
+      <main className="main-content"><OutletHeader state={state} notificationsOpen={notificationsOpen} onToggleNotifications={() => setNotificationsOpen((current) => !current)} onOpenAi={() => setAiOpen(true)} />{apiError && <div className="notice warning" role="alert"><AlertTriangle size={17} />{apiError}</div>}<Outlet /></main>
+      {aiOpen && <AIQueryDialog onClose={() => setAiOpen(false)} />}
     </div>
   );
 }
@@ -453,10 +458,26 @@ function NavItem({ to, icon, label, active }) {
   return <Link className={`nav-item ${active ? "active" : ""}`} to={to}>{icon}<span>{label}</span></Link>;
 }
 
-function OutletHeader({ state, notificationsOpen, onToggleNotifications }) {
+function OutletHeader({ state, notificationsOpen, onToggleNotifications, onOpenAi }) {
   const { pathname } = useLocation();
   const notifications = buildNotifications(state);
-  return <header className="topbar"><div className="breadcrumb"><span>StockSense</span><ChevronRight size={14} /><strong>{pageTitle(pathname)}</strong></div><div className="topbar-actions"><div className="notification-wrap"><button className={`icon-button ${notificationsOpen ? "selected" : ""}`} aria-label="Notifications" aria-expanded={notificationsOpen} onClick={onToggleNotifications}><Bell size={18} />{notifications.length > 0 && <i />}</button>{notificationsOpen && <div className="notifications-panel"><div className="notifications-heading"><div><p className="eyebrow">WORKSPACE ALERTS</p><h3>Notifications</h3></div><span>{notifications.length} active</span></div>{notifications.length ? notifications.map((notification) => <Link to={notification.link} className="notification-row" key={notification.id} onClick={onToggleNotifications}><span className={`notification-icon ${notification.type}`}>{notification.type === "stock" ? <AlertTriangle size={15} /> : notification.type === "waiting" ? <Clock3 size={15} /> : <CalendarDays size={15} />}</span><span><strong>{notification.title}</strong><small>{notification.detail}</small></span><ChevronRight size={14} /></Link>) : <div className="notification-empty"><Check size={16} />No active inventory alerts.</div>}</div>}</div><div className="top-user"><div className="avatar small">{state.user.loginId.slice(0, 2).toUpperCase()}</div><span>{state.user.loginId}</span></div></div></header>;
+  return <header className="topbar"><div className="breadcrumb"><span>StockSense</span><ChevronRight size={14} /><strong>{pageTitle(pathname)}</strong></div><div className="topbar-actions"><button className="ai-topbar-btn" onClick={onOpenAi}><Sparkles size={14} />Ask AI</button><div className="notification-wrap"><button className={`icon-button ${notificationsOpen ? "selected" : ""}`} aria-label="Notifications" aria-expanded={notificationsOpen} onClick={onToggleNotifications}><Bell size={18} />{notifications.length > 0 && <i />}</button>{notificationsOpen && <div className="notifications-panel"><div className="notifications-heading"><div><p className="eyebrow">WORKSPACE ALERTS</p><h3>Notifications</h3></div><span>{notifications.length} active</span></div>{notifications.length ? notifications.map((notification) => <Link to={notification.link} className="notification-row" key={notification.id} onClick={onToggleNotifications}><span className={`notification-icon ${notification.type}`}>{notification.type === "stock" ? <AlertTriangle size={15} /> : notification.type === "waiting" ? <Clock3 size={15} /> : <CalendarDays size={15} />}</span><span><strong>{notification.title}</strong><small>{notification.detail}</small></span><ChevronRight size={14} /></Link>) : <div className="notification-empty"><Check size={16} />No active inventory alerts.</div>}</div>}</div><div className="top-user"><div className="avatar small">{state.user.loginId.slice(0, 2).toUpperCase()}</div><span>{state.user.loginId}</span></div></div></header>;
+}
+
+function AIQueryDialog({ onClose }) {
+  const [query, setQuery] = useState("");
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  async function submit(event) {
+    event.preventDefault();
+    if (!query.trim()) return;
+    setLoading(true); setError("");
+    try { setResult(await aiApi.query(query.trim())); }
+    catch (e) { setError(e.response?.data?.detail || "Could not get an inventory answer. Check the API connection and try again."); }
+    finally { setLoading(false); }
+  }
+  return <div className="ai-backdrop" role="presentation" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}><section className="ai-dialog" role="dialog" aria-modal="true" aria-labelledby="ai-dialog-title"><header><div className="ai-dialog-mark"><BrainCircuit size={18} /></div><div><p className="eyebrow">STOCKSENSE INTELLIGENCE</p><h2 id="ai-dialog-title">Ask about your inventory</h2></div><button className="icon-button" aria-label="Close AI assistant" onClick={onClose}><X size={18} /></button></header><form onSubmit={submit}><label htmlFor="ai-query">Question</label><div className="ai-query-row"><input id="ai-query" autoFocus maxLength={500} value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Which products are low on stock?" /><button className="button primary" disabled={loading || !query.trim()}>{loading ? "Checking…" : "Ask"}</button></div></form><div className="ai-suggestions">{["What products are out of stock?", "Show pending receipts", "Which items are at reorder level?"].map((suggestion) => <button key={suggestion} onClick={() => setQuery(suggestion)}>{suggestion}</button>)}</div>{error && <p className="ai-error" role="alert">{error}</p>}{result && <article className="ai-answer"><p className="eyebrow">{result.title}</p><p>{result.answer}</p><small>Based on live inventory and movement records.</small></article>}</section></div>;
 }
 
 function pageTitle(path) {
@@ -497,6 +518,7 @@ function Dashboard({ state }) {
   const transfers = transferMatches && filters.status === "All statuses" ? state.transfers.filter((transfer) => (!selectedLocation || transfer.from === selectedLocation.id || transfer.to === selectedLocation.id) && (filters.category === "All categories" || state.products.find((product) => product.id === transfer.productId)?.category === filters.category)).length : 0;
   const pendingReceipts = receipts.filter((receipt) => !["Done", "Canceled"].includes(receipt.status)).length;
   const pendingDeliveries = deliveries.filter((delivery) => !["Done", "Canceled"].includes(delivery.status)).length;
+  const intelligence = generateDashboardInsights(state).slice(0, 3);
   const setFilter = (key) => (event) => setFilters((current) => ({ ...current, [key]: event.target.value }));
   return <Page eyebrow="OVERVIEW" title="Dashboard" description="Your current inventory and operations snapshot.">
     <div className="filter-bar dashboard-filter"><div className="filter-title"><Filter size={16} /> FILTERS</div><Select label="Document type" options={["All document types", "Receipts", "Delivery", "Internal", "Adjustments"]} value={filters.documentType} onChange={setFilter("documentType")} /><Select label="Status" options={["All statuses", "Draft", "Waiting", "Ready", "Done", "Canceled"]} value={filters.status} onChange={setFilter("status")} /><Select label="Warehouse / location" options={["All locations", ...state.locations.map((location) => location.name)]} value={filters.location} onChange={setFilter("location")} /><Select label="Product category" options={["All categories", ...unique(state.products.map((product) => product.category))]} value={filters.category} onChange={setFilter("category")} /></div>
@@ -507,6 +529,7 @@ function Dashboard({ state }) {
       <Kpi label="Pending Deliveries" value={pendingDeliveries} detail="Outgoing operations" icon={<ArrowUpFromLine size={19} />} tone="green" onClick={() => navigate("/operations/deliveries")} />
       <Kpi label="Internal Transfers Scheduled" value={transfers} detail="Location movements" icon={<ArrowLeftRight size={19} />} tone="purple" onClick={() => navigate("/operations/transfers")} />
     </div>
+    {intelligence.length > 0 && <section className="ai-insights" aria-label="StockSense AI insights"><div className="ai-insights-title"><BrainCircuit size={17} /><div><p className="eyebrow">STOCKSENSE INTELLIGENCE</p><strong>Inventory signals</strong></div></div><div className="ai-insights-list">{intelligence.map((insight) => <article className={`ai-insight ${insight.severity}`} key={insight.id}><div><strong>{insight.title}</strong><p>{insight.reason}</p></div>{insight.actions?.[0]?.path && <Link to={insight.actions[0].path}>Review <ArrowRight size={13} /></Link>}</article>)}</div></section>}
     <div className="dashboard-grid">
       <section className="panel summary-panel"><div className="panel-heading"><div><p className="eyebrow">INCOMING</p><h3>Receipt summary</h3></div><Link to="/operations/receipts" className="text-link">View all <ArrowRight size={14} /></Link></div><div className="summary-stats"><SummaryStat label="To receive" value={receipts.filter((receipt) => receipt.status !== "Done" && receipt.status !== "Canceled").length} tone="blue" /><SummaryStat label="Late" value={receipts.filter((receipt) => receipt.date < today && receipt.status !== "Done" && receipt.status !== "Canceled").length} tone="red" /><SummaryStat label="Operations" value={receipts.length} tone="slate" /></div><OperationMiniList items={receipts} type="receipt" /></section>
       <section className="panel summary-panel"><div className="panel-heading"><div><p className="eyebrow">OUTGOING</p><h3>Delivery summary</h3></div><Link to="/operations/deliveries" className="text-link">View all <ArrowRight size={14} /></Link></div><div className="summary-stats"><SummaryStat label="To deliver" value={deliveries.filter((delivery) => delivery.status !== "Done" && delivery.status !== "Canceled").length} tone="green" /><SummaryStat label="Late" value={deliveries.filter((delivery) => delivery.date < today && delivery.status !== "Done" && delivery.status !== "Canceled").length} tone="red" /><SummaryStat label="Waiting" value={deliveries.filter((delivery) => delivery.status === "Waiting").length} tone="amber" /></div><OperationMiniList items={deliveries} type="delivery" /></section>

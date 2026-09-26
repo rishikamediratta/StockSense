@@ -41,3 +41,17 @@ def test_inventory_receipt_delivery_transfer_and_adjustment_flow():
 
     assert client.get("/api/products", headers=headers).json()[0]["on_hand"] == 8
     assert len(client.get("/api/moves", headers=headers).json()) == 4
+
+
+def test_ai_query_and_insights_read_current_mongo_inventory():
+    client.post("/api/auth/signup", json={"login_id":"aiuser01", "email":"ai@example.com", "password":"SecurePass@123"})
+    token = client.post("/api/auth/login", json={"login_id":"aiuser01", "password":"SecurePass@123"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    created = client.post("/api/products", headers=headers, json={"code":"AI-LOW","name":"Low Widget","category":"Parts","unit":"pcs","cost_per_unit":1,"on_hand":0,"free_to_use":0,"reorder_point":3})
+    assert created.status_code == 200
+    result = client.post("/api/ai/query", headers=headers, json={"query":"Which products are out of stock?"})
+    assert result.status_code == 200
+    assert result.json()["structured_data"]["items"][0]["code"] == "AI-LOW"
+    insights = client.get("/api/ai/insights", headers=headers)
+    assert insights.status_code == 200
+    assert insights.json()["insights"][0]["product_code"] == "AI-LOW"

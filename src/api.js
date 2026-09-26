@@ -77,4 +77,10 @@ export const inventoryApi = {
   createAdjustment: async (payload) => (await api.post("/api/adjustments", payload)).data,
 };
 
+export const aiApi = {
+  query: async (query) => (await api.post("/api/ai/query", { query })).data,
+  insights: async () => (await api.get("/api/ai/insights")).data,
+  explain: async (identifier) => (await api.get(`/api/ai/explain/${encodeURIComponent(identifier)}`)).data,
+};
+
 export default api;
