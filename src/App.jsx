@@ -216,6 +216,7 @@ function ForgotPassword() {
 
 function AppShell({ state, logout }) {
   const [open, setOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const location = useLocation();
   const nav = useNavigate();
   useEffect(() => setOpen(false), [location.pathname]);
@@ -246,7 +247,7 @@ function AppShell({ state, logout }) {
           <button className="logout-link" onClick={goLogout}><LogOut size={16} /> Logout</button>
         </div>
       </aside>
-      <main className="main-content"><OutletHeader state={state} /><Outlet /></main>
+      <main className="main-content"><OutletHeader state={state} notificationsOpen={notificationsOpen} onToggleNotifications={() => setNotificationsOpen((current) => !current)} /><Outlet /></main>
     </div>
   );
 }
@@ -255,8 +256,10 @@ function NavItem({ to, icon, label, active }) {
   return <Link className={`nav-item ${active ? "active" : ""}`} to={to}>{icon}<span>{label}</span></Link>;
 }
 
-function OutletHeader({ state }) {
-  return <header className="topbar"><div className="breadcrumb"><span>StockSense</span><ChevronRight size={14} /><strong>{pageTitle(location.pathname)}</strong></div><div className="topbar-actions"><button className="icon-button" aria-label="Notifications"><Bell size={18} /><i /></button><div className="top-user"><div className="avatar small">{state.user.loginId.slice(0, 2).toUpperCase()}</div><span>{state.user.loginId}</span></div></div></header>;
+function OutletHeader({ state, notificationsOpen, onToggleNotifications }) {
+  const { pathname } = useLocation();
+  const notifications = buildNotifications(state);
+  return <header className="topbar"><div className="breadcrumb"><span>StockSense</span><ChevronRight size={14} /><strong>{pageTitle(pathname)}</strong></div><div className="topbar-actions"><div className="notification-wrap"><button className={`icon-button ${notificationsOpen ? "selected" : ""}`} aria-label="Notifications" aria-expanded={notificationsOpen} onClick={onToggleNotifications}><Bell size={18} />{notifications.length > 0 && <i />}</button>{notificationsOpen && <div className="notifications-panel"><div className="notifications-heading"><div><p className="eyebrow">WORKSPACE ALERTS</p><h3>Notifications</h3></div><span>{notifications.length} active</span></div>{notifications.length ? notifications.map((notification) => <Link to={notification.link} className="notification-row" key={notification.id} onClick={onToggleNotifications}><span className={`notification-icon ${notification.type}`}>{notification.type === "stock" ? <AlertTriangle size={15} /> : notification.type === "waiting" ? <Clock3 size={15} /> : <CalendarDays size={15} />}</span><span><strong>{notification.title}</strong><small>{notification.detail}</small></span><ChevronRight size={14} /></Link>) : <div className="notification-empty"><Check size={16} />No active inventory alerts.</div>}</div>}</div><div className="top-user"><div className="avatar small">{state.user.loginId.slice(0, 2).toUpperCase()}</div><span>{state.user.loginId}</span></div></div></header>;
 }
 
 function pageTitle(path) {
@@ -279,24 +282,39 @@ function Page({ eyebrow, title, description, action, children, className = "" })
 
 function Dashboard({ state }) {
   const navigate = useNavigate();
-  const lowStock = state.products.filter((p) => Object.values(p.stocks).reduce((a, b) => a + b, 0) <= p.reorder);
-  const pendingReceipts = state.receipts.filter((r) => !["Done", "Canceled"].includes(r.status)).length;
-  const pendingDeliveries = state.deliveries.filter((r) => !["Done", "Canceled"].includes(r.status)).length;
-  const transfers = state.transfers.length;
+  const [filters, setFilters] = useState({ documentType: "All document types", status: "All statuses", location: "All locations", category: "All categories" });
+  const selectedLocation = state.locations.find((location) => location.name === filters.location);
+  const matchesLocation = (item) => !selectedLocation || item.lines?.some((line) => line.locationId === selectedLocation.id);
+  const matchesCategory = (item) => filters.category === "All categories" || item.lines?.some((line) => state.products.find((product) => product.id === line.productId)?.category === filters.category);
+  const matchesOperation = (item, type) => {
+    const typeMatches = filters.documentType === "All document types" || filters.documentType === type;
+    const statusMatches = filters.status === "All statuses" || item.status === filters.status;
+    return typeMatches && statusMatches && matchesLocation(item) && matchesCategory(item);
+  };
+  const receipts = state.receipts.filter((receipt) => matchesOperation(receipt, "Receipts"));
+  const deliveries = state.deliveries.filter((delivery) => matchesOperation(delivery, "Delivery"));
+  const visibleProducts = state.products.filter((product) => (filters.category === "All categories" || product.category === filters.category) && (!selectedLocation || Object.prototype.hasOwnProperty.call(product.stocks, selectedLocation.id)));
+  const quantityFor = (product) => selectedLocation ? product.stocks[selectedLocation.id] || 0 : totalStock(product);
+  const lowStock = visibleProducts.filter((product) => quantityFor(product) <= product.reorder);
+  const transferMatches = filters.documentType === "All document types" || filters.documentType === "Internal";
+  const transfers = transferMatches && filters.status === "All statuses" ? state.transfers.filter((transfer) => (!selectedLocation || transfer.from === selectedLocation.id || transfer.to === selectedLocation.id) && (filters.category === "All categories" || state.products.find((product) => product.id === transfer.productId)?.category === filters.category)).length : 0;
+  const pendingReceipts = receipts.filter((receipt) => !["Done", "Canceled"].includes(receipt.status)).length;
+  const pendingDeliveries = deliveries.filter((delivery) => !["Done", "Canceled"].includes(delivery.status)).length;
+  const setFilter = (key) => (event) => setFilters((current) => ({ ...current, [key]: event.target.value }));
   return <Page eyebrow="OVERVIEW" title="Dashboard" description="Your current inventory and operations snapshot.">
-    <div className="filter-bar dashboard-filter"><div className="filter-title"><Filter size={16} /> FILTERS</div><Select label="Document type" options={["All document types", "Receipts", "Delivery", "Internal", "Adjustments"]} /><Select label="Status" options={["All statuses", "Draft", "Waiting", "Ready", "Done", "Canceled"]} /><Select label="Warehouse / location" options={["All locations", ...state.locations.map((l) => l.name)]} /><Select label="Product category" options={["All categories", ...unique(state.products.map((p) => p.category))]} /></div>
+    <div className="filter-bar dashboard-filter"><div className="filter-title"><Filter size={16} /> FILTERS</div><Select label="Document type" options={["All document types", "Receipts", "Delivery", "Internal", "Adjustments"]} value={filters.documentType} onChange={setFilter("documentType")} /><Select label="Status" options={["All statuses", "Draft", "Waiting", "Ready", "Done", "Canceled"]} value={filters.status} onChange={setFilter("status")} /><Select label="Warehouse / location" options={["All locations", ...state.locations.map((location) => location.name)]} value={filters.location} onChange={setFilter("location")} /><Select label="Product category" options={["All categories", ...unique(state.products.map((product) => product.category))]} value={filters.category} onChange={setFilter("category")} /></div>
     <div className="kpi-grid">
-      <Kpi label="Total Products in Stock" value={state.products.length} detail="Active products" icon={<Package size={19} />} tone="blue" onClick={() => navigate("/products")} />
+      <Kpi label="Total Products in Stock" value={visibleProducts.length} detail="Active products" icon={<Package size={19} />} tone="blue" onClick={() => navigate("/products")} />
       <Kpi label="Low Stock / Out of Stock" value={lowStock.length} detail="Needs attention" icon={<AlertTriangle size={19} />} tone="red" onClick={() => navigate("/products?filter=low")} />
       <Kpi label="Pending Receipts" value={pendingReceipts} detail="Incoming operations" icon={<ArrowDownToLine size={19} />} tone="amber" onClick={() => navigate("/operations/receipts")} />
       <Kpi label="Pending Deliveries" value={pendingDeliveries} detail="Outgoing operations" icon={<ArrowUpFromLine size={19} />} tone="green" onClick={() => navigate("/operations/deliveries")} />
       <Kpi label="Internal Transfers Scheduled" value={transfers} detail="Location movements" icon={<ArrowLeftRight size={19} />} tone="purple" onClick={() => navigate("/operations/transfers")} />
     </div>
     <div className="dashboard-grid">
-      <section className="panel summary-panel"><div className="panel-heading"><div><p className="eyebrow">INCOMING</p><h3>Receipt summary</h3></div><Link to="/operations/receipts" className="text-link">View all <ArrowRight size={14} /></Link></div><div className="summary-stats"><SummaryStat label="To receive" value={state.receipts.filter((r) => r.status !== "Done" && r.status !== "Canceled").length} tone="blue" /><SummaryStat label="Late" value={state.receipts.filter((r) => r.date < today && r.status !== "Done" && r.status !== "Canceled").length} tone="red" /><SummaryStat label="Operations" value={state.receipts.length} tone="slate" /></div><OperationMiniList items={state.receipts} type="receipt" /></section>
-      <section className="panel summary-panel"><div className="panel-heading"><div><p className="eyebrow">OUTGOING</p><h3>Delivery summary</h3></div><Link to="/operations/deliveries" className="text-link">View all <ArrowRight size={14} /></Link></div><div className="summary-stats"><SummaryStat label="To deliver" value={state.deliveries.filter((r) => r.status !== "Done" && r.status !== "Canceled").length} tone="green" /><SummaryStat label="Late" value={state.deliveries.filter((r) => r.date < today && r.status !== "Done" && r.status !== "Canceled").length} tone="red" /><SummaryStat label="Waiting" value={state.deliveries.filter((r) => r.status === "Waiting").length} tone="amber" /></div><OperationMiniList items={state.deliveries} type="delivery" /></section>
+      <section className="panel summary-panel"><div className="panel-heading"><div><p className="eyebrow">INCOMING</p><h3>Receipt summary</h3></div><Link to="/operations/receipts" className="text-link">View all <ArrowRight size={14} /></Link></div><div className="summary-stats"><SummaryStat label="To receive" value={receipts.filter((receipt) => receipt.status !== "Done" && receipt.status !== "Canceled").length} tone="blue" /><SummaryStat label="Late" value={receipts.filter((receipt) => receipt.date < today && receipt.status !== "Done" && receipt.status !== "Canceled").length} tone="red" /><SummaryStat label="Operations" value={receipts.length} tone="slate" /></div><OperationMiniList items={receipts} type="receipt" /></section>
+      <section className="panel summary-panel"><div className="panel-heading"><div><p className="eyebrow">OUTGOING</p><h3>Delivery summary</h3></div><Link to="/operations/deliveries" className="text-link">View all <ArrowRight size={14} /></Link></div><div className="summary-stats"><SummaryStat label="To deliver" value={deliveries.filter((delivery) => delivery.status !== "Done" && delivery.status !== "Canceled").length} tone="green" /><SummaryStat label="Late" value={deliveries.filter((delivery) => delivery.date < today && delivery.status !== "Done" && delivery.status !== "Canceled").length} tone="red" /><SummaryStat label="Waiting" value={deliveries.filter((delivery) => delivery.status === "Waiting").length} tone="amber" /></div><OperationMiniList items={deliveries} type="delivery" /></section>
     </div>
-    <section className="panel"><div className="panel-heading"><div><p className="eyebrow">STOCK HEALTH</p><h3>Products needing attention</h3></div><Link to="/stock" className="text-link">Open stock <ArrowRight size={14} /></Link></div><div className="table-wrap"><table><thead><tr><th>Product</th><th>SKU / Code</th><th>Category</th><th>On Hand</th><th>Reorder Point</th><th>Status</th></tr></thead><tbody>{lowStock.length ? lowStock.map((p) => <tr key={p.id} onClick={() => navigate(`/products/${p.id}/edit`)}><td><strong>{p.name}</strong></td><td className="mono">{p.sku}</td><td>{p.category}</td><td>{totalStock(p)}</td><td>{p.reorder}</td><td><StatusBadge status={totalStock(p) === 0 ? "Out of Stock" : "Low Stock"} /></td></tr>) : <EmptyRow text="All products are above their reorder point." />}</tbody></table></div></section>
+    <section className="panel"><div className="panel-heading"><div><p className="eyebrow">STOCK HEALTH</p><h3>Products needing attention</h3></div><Link to="/stock" className="text-link">Open stock <ArrowRight size={14} /></Link></div><div className="table-wrap"><table><thead><tr><th>Product</th><th>SKU / Code</th><th>Category</th><th>On Hand</th><th>Reorder Point</th><th>Status</th></tr></thead><tbody>{lowStock.length ? lowStock.map((product) => <tr key={product.id} onClick={() => navigate(`/products/${product.id}/edit`)}><td><strong>{product.name}</strong></td><td className="mono">{product.sku}</td><td>{product.category}</td><td>{quantityFor(product)}</td><td>{product.reorder}</td><td><StatusBadge status={quantityFor(product) === 0 ? "Out of Stock" : "Low Stock"} /></td></tr>) : <EmptyRow text="All products are above their reorder point." />}</tbody></table></div></section>
   </Page>;
 }
 
@@ -543,6 +561,17 @@ function Meta({ label, value }) { return <div className="meta"><span>{label}</sp
 function StatusBadge({ status }) { const normalized = status.toLowerCase().replaceAll(" ", "-"); return <span className={`status-badge ${normalized}`}><i />{status}</span>; }
 function DateLabel({ date, status }) { const late = date < today && !["Done", "Canceled"].includes(status); return <span className={late ? "date-late" : ""}>{formatDate(date)}{late && <small>Late</small>}</span>; }
 function EmptyRow({ text }) { return <tr><td colSpan="10"><div className="empty-state">{text}</div></td></tr>; }
+
+function buildNotifications(state) {
+  const lowStock = state.products.filter((product) => totalStock(product) <= product.reorder);
+  const lateOperations = [...state.receipts, ...state.deliveries].filter((operation) => operation.date < today && !["Done", "Canceled"].includes(operation.status));
+  const waitingDeliveries = state.deliveries.filter((delivery) => delivery.status === "Waiting");
+  return [
+    lowStock.length && { id: "low-stock", type: "stock", title: `${lowStock.length} product${lowStock.length === 1 ? "" : "s"} need attention`, detail: lowStock.slice(0, 2).map((product) => product.name).join(", "), link: "/stock" },
+    lateOperations.length && { id: "late-operations", type: "late", title: `${lateOperations.length} late operation${lateOperations.length === 1 ? "" : "s"}`, detail: lateOperations.slice(0, 2).map((operation) => operation.reference).join(", "), link: "/dashboard" },
+    waitingDeliveries.length && { id: "waiting-deliveries", type: "waiting", title: `${waitingDeliveries.length} ${waitingDeliveries.length === 1 ? "delivery" : "deliveries"} waiting for stock`, detail: waitingDeliveries.slice(0, 2).map((delivery) => delivery.reference).join(", "), link: "/operations/deliveries" },
+  ].filter(Boolean);
+}
 
 function applyOperation(current, item, type) {
   const collection = type === "receipt" ? "receipts" : "deliveries";
