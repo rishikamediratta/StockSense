@@ -37,87 +37,81 @@ import {
   X,
 } from "lucide-react";
 import { Link, Navigate, Outlet, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
-import { authApi } from "./api";
+import { authApi, inventoryApi } from "./api";
 
 
 const today = new Date().toISOString().slice(0, 10);
 const uid = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
-const seedState = {
-  user: { loginId: "manager01", email: "manager@stocksense.local", password: "Stocksense@2026" },
-  products: [
-    { id: "p1", name: "Desk", sku: "DESK001", category: "Furniture", uom: "Units", reorder: 20, cost: 3000, stocks: { "loc-1": 50, "loc-2": 8 } },
-    { id: "p2", name: "Table", sku: "TABLE001", category: "Furniture", uom: "Units", reorder: 15, cost: 3000, stocks: { "loc-1": 50, "loc-2": 12 } },
-    { id: "p3", name: "Steel Rod", sku: "ROD001", category: "Raw Material", uom: "Units", reorder: 30, cost: 850, stocks: { "loc-1": 18, "loc-2": 0 } },
-    { id: "p4", name: "Office Chair", sku: "CHAIR001", category: "Furniture", uom: "Units", reorder: 12, cost: 1800, stocks: { "loc-1": 6, "loc-2": 4 } },
-  ],
-  warehouses: [
-    { id: "wh-1", name: "Main Warehouse", code: "WH", address: "14 Industrial Estate, Bengaluru" },
-    { id: "wh-2", name: "North Warehouse", code: "NW", address: "8 Logistics Park, Pune" },
-  ],
-  locations: [
-    { id: "loc-1", name: "Main Stock", code: "STOCK1", warehouseId: "wh-1" },
-    { id: "loc-2", name: "Production Floor", code: "PROD", warehouseId: "wh-1" },
-    { id: "loc-3", name: "North Stock", code: "STOCK2", warehouseId: "wh-2" },
-  ],
-  receipts: [
-    { id: "r1", reference: "WH/IN/0001", contact: "Metro Supplies", date: "2026-09-24", status: "Ready", responsible: "manager01", lines: [{ productId: "p3", quantity: 25, locationId: "loc-1" }] },
-    { id: "r2", reference: "WH/IN/0002", contact: "Furniture Hub", date: "2026-09-29", status: "Draft", responsible: "manager01", lines: [{ productId: "p4", quantity: 20, locationId: "loc-1" }] },
-    { id: "r3", reference: "NW/IN/0003", contact: "Office Works", date: "2026-09-22", status: "Done", responsible: "manager01", lines: [{ productId: "p2", quantity: 10, locationId: "loc-3" }] },
-  ],
-  deliveries: [
-    { id: "d1", reference: "WH/OUT/0001", contact: "Acme Interiors", address: "22 Residency Road, Bengaluru", date: "2026-09-27", status: "Ready", responsible: "manager01", operationType: "Delivery Order", lines: [{ productId: "p1", quantity: 5, locationId: "loc-1" }] },
-    { id: "d2", reference: "WH/OUT/0002", contact: "Studio Nine", address: "4 Park Street, Kolkata", date: "2026-09-23", status: "Waiting", responsible: "manager01", operationType: "Delivery Order", lines: [{ productId: "p3", quantity: 30, locationId: "loc-2" }] },
-    { id: "d3", reference: "NW/OUT/0003", contact: "Design Co.", address: "19 MG Road, Pune", date: "2026-10-01", status: "Draft", responsible: "manager01", operationType: "Delivery Order", lines: [{ productId: "p2", quantity: 4, locationId: "loc-3" }] },
-  ],
-  transfers: [],
-  adjustments: [],
-  ledger: [
-    { id: "m1", reference: "WH/IN/0000", type: "Receipt", contact: "Office Works", status: "Done", date: "2026-09-18", from: "Vendor", to: "WH / Main Stock", productId: "p1", quantity: 12, direction: "in" },
-    { id: "m2", reference: "WH/OUT/0000", type: "Delivery", contact: "Design Co.", status: "Done", date: "2026-09-19", from: "WH / Main Stock", to: "Customer", productId: "p2", quantity: 6, direction: "out" },
-    { id: "m3", reference: "WH/INT/0001", type: "Internal", contact: "Internal Transfer", status: "Done", date: "2026-09-20", from: "WH / Main Stock", to: "WH / Production Floor", productId: "p1", quantity: 4, direction: "internal" },
-  ],
+const emptyState = {
+  user: { loginId: "", email: "" },
+  products: [], warehouses: [], locations: [], receipts: [], deliveries: [],
+  transfers: [], adjustments: [], ledger: [],
 };
 
 const clone = (data) => JSON.parse(JSON.stringify(data));
-const getStoredState = () => {
-  try {
-    const saved = localStorage.getItem("stocksense-state");
-    return saved ? JSON.parse(saved) : clone(seedState);
-  } catch {
-    return clone(seedState);
-  }
-};
+const getStoredState = () => clone(emptyState);
 
 function App() {
   const [state, setState] = useState(getStoredState);
-  const [authenticated, setAuthenticated] = useState(() => localStorage.getItem("stocksense-auth") === "true");
-
-  useEffect(() => localStorage.setItem("stocksense-state", JSON.stringify(state)), [state]);
-  useEffect(() => {
-    if (authenticated) localStorage.setItem("stocksense-auth", "true");
-    else localStorage.removeItem("stocksense-auth");
-  }, [authenticated]);
+  const [authenticated, setAuthenticated] = useState(() => Boolean(localStorage.getItem("stocksense-token")));
+  const [apiError, setApiError] = useState("");
 
   useEffect(() => {
     const token = localStorage.getItem("stocksense-token");
-    if (token) {
-      authApi
-        .me()
-        .then((user) => {
-          setState((cur) => ({
-            ...cur,
-            user: { ...cur.user, loginId: user.login_id, email: user.email, id: user.id },
-          }));
-          setAuthenticated(true);
-        })
-        .catch(() => {
-          localStorage.removeItem("stocksense-token");
-          localStorage.removeItem("stocksense-auth");
-          setAuthenticated(false);
-        });
-    }
-  }, []);
+    if (!authenticated || !token) return;
+    let active = true;
+    Promise.all([
+      authApi.me(), inventoryApi.products(), inventoryApi.warehouses(), inventoryApi.locations(),
+      inventoryApi.receipts(), inventoryApi.deliveries(), inventoryApi.moves(), inventoryApi.transfers(), inventoryApi.adjustments(),
+    ]).then(([user, products, warehouses, locations, receipts, deliveries, moves, transfers, adjustments]) => {
+      if (!active) return;
+      const warehouseRecords = warehouses.map((w) => ({ id: String(w.id), name: w.name, code: w.short_code, address: w.address }));
+      const locationRecords = locations.map((l) => ({ id: String(l.id), name: l.name, code: l.short_code, warehouseId: String(l.warehouse_id) }));
+      const productRecords = products.map(productFromApi);
+      const locationByLabel = new Map(locationRecords.map((location) => {
+        const warehouse = warehouseRecords.find((record) => record.id === location.warehouseId);
+        return [`${warehouse?.code || ""}/${location.code}`, location.id];
+      }));
+      for (const move of moves) {
+        const product = productRecords.find((record) => record.id === String(move.product_id));
+        if (!product) continue;
+        const fromId = locationByLabel.get(move.from_location);
+        const toId = locationByLabel.get(move.to_location);
+        if (move.direction === "in" && toId) product.stocks[toId] = (product.stocks[toId] || 0) + Number(move.qty);
+        if (move.direction === "out" && fromId) product.stocks[fromId] = (product.stocks[fromId] || 0) - Number(move.qty);
+        if (move.direction === "internal") {
+          if (fromId) product.stocks[fromId] = (product.stocks[fromId] || 0) - Number(move.qty);
+          if (toId) product.stocks[toId] = (product.stocks[toId] || 0) + Number(move.qty);
+        }
+        if (move.direction === "adjustment") {
+          if (fromId) product.stocks[fromId] = (product.stocks[fromId] || 0) - Number(move.qty);
+          if (toId) product.stocks[toId] = (product.stocks[toId] || 0) + Number(move.qty);
+        }
+      }
+      setState({
+        user: { loginId: user.login_id, email: user.email, id: String(user.id) },
+        products: productRecords,
+        warehouses: warehouseRecords,
+        locations: locationRecords,
+        receipts: receipts.map((r) => ({ id: String(r.id), reference: r.reference, contact: r.contact, date: r.schedule_date.slice(0, 10), status: r.status, responsible: user.login_id, lines: (r.lines || []).map((line) => ({ productId: String(line.product_id), quantity: Number(line.qty), locationId: line.location_id == null ? null : String(line.location_id) })) })),
+        deliveries: deliveries.map((d) => ({ id: String(d.id), reference: d.reference, contact: d.contact || d.delivery_address, address: d.delivery_address, date: d.schedule_date.slice(0, 10), status: d.status, responsible: user.login_id, operationType: "Delivery Order", lines: (d.lines || []).map((line) => ({ productId: String(line.product_id), quantity: Number(line.qty), locationId: line.location_id == null ? null : String(line.location_id) })) })),
+        transfers: transfers.map((t) => ({ id: String(t.id), reference: t.reference, productId: String(t.product_id), quantity: Number(t.qty), from: String(t.source_location_id), to: String(t.destination_location_id), date: t.created_at.slice(0, 10) })),
+        adjustments: adjustments.map((a) => ({ id: String(a.id), reference: a.reference, productId: String(a.product_id), locationId: String(a.location_id), recorded: Number(a.recorded_quantity), counted: Number(a.counted_quantity), delta: Number(a.delta), date: a.created_at.slice(0, 10) })),
+        ledger: moves.map((m) => ({ id: String(m.id), reference: m.source_ref, type: m.direction === "in" ? "Receipt" : m.direction === "adjustment" ? "Adjustment" : m.direction === "internal" ? "Internal" : "Delivery", contact: "", status: "Done", date: m.date.slice(0, 10), from: m.from_location, to: m.to_location, productId: String(m.product_id), quantity: m.qty, direction: m.direction === "adjustment" ? (m.to_location === "Adjustment" ? "out" : "in") : m.direction })),
+      });
+      setApiError("");
+    }).catch((error) => {
+      if (!active) return;
+      if (error.response?.status === 401) {
+        localStorage.removeItem("stocksense-token");
+        setAuthenticated(false);
+      } else {
+        setApiError("Could not load inventory data from the API. Confirm the backend is running.");
+      }
+    });
+    return () => { active = false; };
+  }, [authenticated]);
 
   const actions = useMemo(
     () => ({
@@ -133,7 +127,6 @@ function App() {
       },
       logout: () => {
         localStorage.removeItem("stocksense-token");
-        localStorage.removeItem("stocksense-auth");
         setAuthenticated(false);
       },
       update: (updater) =>
@@ -141,7 +134,7 @@ function App() {
           const next = updater(clone(current));
           return next;
         }),
-      reset: () => setState(clone(seedState)),
+      reset: () => setState(clone(emptyState)),
     }),
     []
   );
@@ -151,7 +144,7 @@ function App() {
       <Route path="/login" element={<AuthPage type="login" onLogin={actions.login} state={state} />} />
       <Route path="/signup" element={<AuthPage type="signup" onLogin={actions.login} state={state} update={actions.update} />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
-      <Route element={authenticated ? <AppShell state={state} logout={actions.logout} /> : <Navigate to="/login" replace />}>
+      <Route element={authenticated ? <AppShell state={state} logout={actions.logout} apiError={apiError} /> : <Navigate to="/login" replace />}>
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<Dashboard state={state} />} />
         <Route path="/products" element={<Products state={state} />} />
@@ -276,7 +269,7 @@ function AuthPage({ type, onLogin, state, update }) {
             </button>
           </form>
           {isLogin ? <div className="auth-links"><Link to="/forgot-password">Forget Password ?</Link><span>New to StockSense? <Link to="/signup">Sign Up</Link></span></div> : <div className="auth-links centered"><span>Already have an account? <Link to="/login">Login</Link></span></div>}
-          {isLogin && <p className="demo-hint">Demo access: manager01 / Stocksense@2026</p>}
+          {isLogin && <p className="demo-hint">New here? Create an account with Sign Up to get started.</p>}
         </div>
       </main>
     </div>
@@ -418,7 +411,7 @@ function ForgotPassword() {
   );
 }
 
-function AppShell({ state, logout }) {
+function AppShell({ state, logout, apiError }) {
   const [open, setOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const location = useLocation();
@@ -451,7 +444,7 @@ function AppShell({ state, logout }) {
           <button className="logout-link" onClick={goLogout}><LogOut size={16} /> Logout</button>
         </div>
       </aside>
-      <main className="main-content"><OutletHeader state={state} notificationsOpen={notificationsOpen} onToggleNotifications={() => setNotificationsOpen((current) => !current)} /><Outlet /></main>
+      <main className="main-content"><OutletHeader state={state} notificationsOpen={notificationsOpen} onToggleNotifications={() => setNotificationsOpen((current) => !current)} />{apiError && <div className="notice warning" role="alert"><AlertTriangle size={17} />{apiError}</div>}<Outlet /></main>
     </div>
   );
 }
@@ -546,17 +539,27 @@ function ProductForm({ state, update }) {
   const [form, setForm] = useState(product ? { ...product } : { name: "", sku: "", category: "", uom: "Units", initialStock: "", reorder: 0 });
   const [error, setError] = useState("");
   const change = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
-  const save = (e) => {
+  const save = async (e) => {
     e.preventDefault();
     setError("");
     if (!form.name || !form.sku || !form.category || !form.uom) return setError("Complete all product information fields.");
     if (state.products.some((p) => p.sku.toLowerCase() === form.sku.toLowerCase() && p.id !== id)) return setError("SKU / Code must be unique.");
     if (Number(form.initialStock || 0) < 0 || Number(form.reorder || 0) < 0) return setError("Stock values cannot be negative.");
-    update((current) => {
-      if (isEdit) return { ...current, products: current.products.map((p) => p.id === id ? { ...p, name: form.name, sku: form.sku.toUpperCase(), category: form.category, uom: form.uom, reorder: Number(form.reorder || 0) } : p) };
-      return { ...current, products: [...current.products, { id: uid("p"), name: form.name, sku: form.sku.toUpperCase(), category: form.category, uom: form.uom, reorder: Number(form.reorder || 0), cost: 0, stocks: { "loc-1": Number(form.initialStock || 0) } }] };
-    });
-    navigate("/products");
+    try {
+      const payload = {
+        code: form.sku.toUpperCase(), name: form.name.trim(), category: form.category.trim(),
+        unit: form.uom, cost_per_unit: Number(form.cost || 0),
+        reorder_point: Number(form.reorder || 0),
+        on_hand: isEdit ? Number(product.onHand || 0) : Number(form.initialStock || 0),
+        free_to_use: isEdit ? Number(product.freeToUse || product.onHand || 0) : Number(form.initialStock || 0),
+      };
+      const saved = isEdit ? await inventoryApi.updateProduct(id, payload) : await inventoryApi.createProduct(payload);
+      const normalized = productFromApi(saved);
+      update((current) => ({ ...current, products: isEdit ? current.products.map((p) => p.id === id ? { ...p, ...normalized, stocks: p.stocks, reorder: Number(form.reorder || 0) } : p) : [...current.products, { ...normalized, reorder: Number(form.reorder || 0) }] }));
+      navigate("/products");
+    } catch (requestError) {
+      setError(requestError.response?.data?.detail || "Could not save the product. Check the API connection and try again.");
+    }
   };
   return <Page eyebrow="CATALOG / PRODUCTS" title={isEdit ? "Edit Product" : "New Product"} description={isEdit ? "Update the product information used across inventory operations." : "Add a product to your inventory catalog."} action={<Link className="button secondary" to="/products"><ArrowRight size={16} className="rotate-180" /> Back to Products</Link>}>
     <form onSubmit={save} className="business-form">
@@ -570,10 +573,13 @@ function ProductForm({ state, update }) {
 function Stock({ state }) {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
-  const rows = state.products.flatMap((p) => Object.entries(p.stocks).map(([locationId, qty]) => ({ p, locationId, qty }))).filter(({ p }) => `${p.name} ${p.sku}`.toLowerCase().includes(query.toLowerCase()));
+  const rows = state.products.flatMap((p) => {
+    const locations = Object.entries(p.stocks || {});
+    return (locations.length ? locations.map(([locationId, qty]) => ({ p, locationId, qty })) : [{ p, locationId: null, qty: totalStock(p) }]);
+  }).filter(({ p }) => `${p.name} ${p.sku}`.toLowerCase().includes(query.toLowerCase()));
   return <Page eyebrow="INVENTORY" title="Stock" description="Current quantities by product and warehouse location." action={<Link className="button primary" to="/operations/adjustments"><Plus size={17} /> Update Stock</Link>}>
     <div className="toolbar"><div className="search-box"><Search size={17} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search product or SKU" /></div><button className="button secondary"><Filter size={16} /> Filters</button></div>
-    <section className="panel"><div className="table-wrap"><table><thead><tr><th>Product</th><th>Per Unit Cost</th><th>Warehouse / Location</th><th>On Hand</th><th>Free to Use</th><th>Status</th><th></th></tr></thead><tbody>{rows.map(({ p, locationId, qty }) => { const location = state.locations.find((l) => l.id === locationId); const free = qty - state.deliveries.flatMap((d) => d.lines).filter((l) => l.productId === p.id && l.locationId === locationId && !["Done", "Canceled"].includes(state.deliveries.find((d) => d.lines.includes(l))?.status)).reduce((a, l) => a + l.quantity, 0); return <tr key={`${p.id}-${locationId}`}><td><div className="cell-title"><span className="product-icon"><Package size={15} /></span><strong>{p.name}</strong><small className="mono">{p.sku}</small></div></td><td>₹{p.cost.toLocaleString("en-IN")}</td><td>{location?.name}<small className="sub-cell">{state.warehouses.find((w) => w.id === location?.warehouseId)?.name}</small></td><td><strong>{qty}</strong></td><td>{Math.max(0, free)}</td><td><StatusBadge status={qty === 0 ? "Out of Stock" : qty <= p.reorder ? "Low Stock" : "In Stock"} /></td><td><button className="button ghost small" onClick={() => navigate("/operations/adjustments")}>Adjust</button></td></tr>})}</tbody></table></div></section>
+    <section className="panel"><div className="table-wrap"><table><thead><tr><th>Product</th><th>Per Unit Cost</th><th>Warehouse / Location</th><th>On Hand</th><th>Free to Use</th><th>Status</th><th></th></tr></thead><tbody>{rows.map(({ p, locationId, qty }) => { const location = state.locations.find((l) => l.id === locationId); const free = locationId ? qty - state.deliveries.flatMap((d) => d.lines).filter((l) => l.productId === p.id && l.locationId === locationId && !["Done", "Canceled"].includes(state.deliveries.find((d) => d.lines.includes(l))?.status)).reduce((a, l) => a + l.quantity, 0) : Number(p.freeToUse ?? qty); return <tr key={`${p.id}-${locationId || "aggregate"}`}><td><div className="cell-title"><span className="product-icon"><Package size={15} /></span><strong>{p.name}</strong><small className="mono">{p.sku}</small></div></td><td>₹{Number(p.cost || 0).toLocaleString("en-IN")}</td><td>{location?.name || "All locations (aggregate)"}<small className="sub-cell">{location ? state.warehouses.find((w) => w.id === location.warehouseId)?.name : "Location detail unavailable"}</small></td><td><strong>{qty}</strong></td><td>{Math.max(0, free)}</td><td><StatusBadge status={qty === 0 ? "Out of Stock" : qty <= p.reorder ? "Low Stock" : "In Stock"} /></td><td><button className="button ghost small" onClick={() => navigate("/operations/adjustments")}>Adjust</button></td></tr>})}</tbody></table></div></section>
   </Page>;
 }
 
@@ -604,7 +610,7 @@ function OperationForm({ kind, state, update }) {
   const [form, setForm] = useState({ contact: "", address: "", date: today, productId: "", quantity: "", locationId: "" });
   const [error, setError] = useState("");
   const change = (key) => (e) => setForm((current) => ({ ...current, [key]: e.target.value }));
-  const save = (e) => {
+  const save = async (e) => {
     e.preventDefault();
     setError("");
     const quantity = Number(form.quantity);
@@ -612,20 +618,29 @@ function OperationForm({ kind, state, update }) {
       return setError("Complete the contact, schedule, product, quantity, and location fields.");
     }
     const warehouse = state.warehouses.find((w) => w.id === state.locations.find((l) => l.id === form.locationId)?.warehouseId) || state.warehouses[0];
-    const prefix = `${warehouse.code}/${isReceipt ? "IN" : "OUT"}`;
-    const nextNumber = state[collection].length + 1;
-    const item = {
-      id: uid(isReceipt ? "r" : "d"),
-      reference: `${prefix}/${String(nextNumber).padStart(4, "0")}`,
-      contact: form.contact,
-      date: form.date,
-      status: "Draft",
-      responsible: state.user.loginId,
-      lines: [{ productId: form.productId, quantity, locationId: form.locationId }],
-      ...(isReceipt ? {} : { address: form.address, operationType: "Delivery Order" }),
-    };
-    update((current) => ({ ...current, [collection]: [...current[collection], item] }));
-    navigate(`/operations/${collection}/${item.id}`);
+    try {
+      const payload = {
+        ...(isReceipt ? { contact: form.contact } : { contact: form.contact, delivery_address: form.address }),
+        schedule_date: `${form.date}T00:00:00`,
+        warehouse_id: Number(warehouse.id),
+        lines: [{ product_id: Number(form.productId), location_id: Number(form.locationId), qty: quantity }],
+      };
+      const saved = isReceipt ? await inventoryApi.createReceipt(payload) : await inventoryApi.createDelivery(payload);
+      const item = {
+        id: String(saved.id), reference: saved.reference, contact: saved.contact || form.contact,
+        address: saved.delivery_address || form.address, date: saved.schedule_date.slice(0, 10),
+        status: saved.status, responsible: state.user.loginId,
+        operationType: "Delivery Order",
+        lines: (saved.lines || payload.lines).map((line) => ({
+          productId: String(line.product_id), quantity: Number(line.qty),
+          locationId: line.location_id == null ? form.locationId : String(line.location_id),
+        })),
+      };
+      update((current) => ({ ...current, [collection]: [...current[collection], item] }));
+      navigate(`/operations/${collection}/${item.id}`);
+    } catch (requestError) {
+      setError(requestError.response?.data?.detail || "Could not create this operation. Check the API connection and try again.");
+    }
   };
   return <Page eyebrow={`OPERATIONS / ${isReceipt ? "INCOMING" : "OUTGOING"}`} title={isReceipt ? "New Receipt" : "New Delivery"} description={isReceipt ? "Create an incoming stock receipt." : "Create an outgoing delivery order."} action={<Link className="button secondary" to={`/operations/${collection}`}><ArrowRight size={16} className="rotate-180" /> Back to list</Link>}>
     <form onSubmit={save} className="business-form">
@@ -649,27 +664,44 @@ function OperationDetail({ kind, state, update }) {
     const available = product?.stocks?.[locationId];
     return available !== undefined && available < quantity;
   });
-  const transition = (action) => {
+  const transition = async (action) => {
     if (action === "cancel") {
       if (!window.confirm("Cancel this operation?")) return;
-      update((current) => ({ ...current, [collection]: current[collection].map((entry) => entry.id === id ? { ...entry, status: "Canceled" } : entry) }));
+      try {
+        const saved = isReceipt ? await inventoryApi.cancelReceipt(id) : await inventoryApi.cancelDelivery(id);
+        update((current) => ({ ...current, [collection]: current[collection].map((entry) => entry.id === id ? { ...entry, status: saved.status } : entry) }));
+      } catch (requestError) { setNotice(requestError.response?.data?.detail || "Could not cancel this operation."); }
       return;
     }
     if (action === "print") { window.print(); return; }
-    if (isReceipt && item.status === "Draft") update((current) => ({ ...current, receipts: current.receipts.map((entry) => entry.id === id ? { ...entry, status: "Ready" } : entry) }));
+    if (isReceipt && item.status === "Draft") {
+      try {
+        const saved = await inventoryApi.readyReceipt(id);
+        update((current) => ({ ...current, receipts: current.receipts.map((entry) => entry.id === id ? { ...entry, status: saved.status } : entry) }));
+      } catch (requestError) { setNotice(requestError.response?.data?.detail || "Could not prepare this receipt."); }
+    }
     else if (isReceipt && item.status === "Ready") {
-      update((current) => applyOperation(current, item, "receipt"));
-      setNotice("Receipt validated and stock increased.");
+      try {
+        await inventoryApi.validateReceipt(id);
+        window.location.assign("/dashboard");
+      } catch (requestError) { setNotice(requestError.response?.data?.detail || "Could not validate this receipt."); }
     } else if (!isReceipt && item.status === "Draft") {
-      const next = stockBlocked ? "Waiting" : "Ready";
-      update((current) => ({ ...current, deliveries: current.deliveries.map((entry) => entry.id === id ? { ...entry, status: next } : entry) }));
-      if (stockBlocked) setNotice("Some lines are waiting for stock.");
+      try {
+        const saved = await inventoryApi.readyDelivery(id);
+        update((current) => ({ ...current, deliveries: current.deliveries.map((entry) => entry.id === id ? { ...entry, status: saved.status } : entry) }));
+        if (saved.status === "Waiting") setNotice("Some lines are waiting for stock.");
+      } catch (requestError) { setNotice(requestError.response?.data?.detail || "Could not prepare this delivery."); }
     } else if (!isReceipt && item.status === "Waiting" && !stockBlocked) {
-      update((current) => ({ ...current, deliveries: current.deliveries.map((entry) => entry.id === id ? { ...entry, status: "Ready" } : entry) }));
+      try {
+        const saved = await inventoryApi.readyDelivery(id);
+        update((current) => ({ ...current, deliveries: current.deliveries.map((entry) => entry.id === id ? { ...entry, status: saved.status } : entry) }));
+      } catch (requestError) { setNotice(requestError.response?.data?.detail || "Could not prepare this delivery."); }
     } else if (!isReceipt && item.status === "Ready") {
       if (stockBlocked) return setNotice("Cannot validate: required stock is unavailable.");
-      update((current) => applyOperation(current, item, "delivery"));
-      setNotice("Delivery validated and stock decreased.");
+      try {
+        await inventoryApi.validateDelivery(id);
+        window.location.assign("/dashboard");
+      } catch (requestError) { setNotice(requestError.response?.data?.detail || "Could not validate this delivery."); }
     }
   };
   const primaryLabel = item.status === "Draft" ? "To Do" : item.status === "Ready" ? "Validate" : item.status === "Waiting" ? "Check Stock" : null;
@@ -686,20 +718,18 @@ function Transfers({ state, update }) {
   const [error, setError] = useState("");
   const change = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
   const sourceProduct = state.products.find((p) => p.id === form.productId);
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault(); setError(""); setNotice("");
     const qty = Number(form.quantity);
     if (!form.productId || !form.from || !form.to || !qty || qty < 0) return setError("Select a product and valid quantity and locations.");
     if (form.from === form.to) return setError("From and To locations must be different.");
     if ((sourceProduct?.stocks?.[form.from] || 0) < qty) return setError("Insufficient stock at the source location.");
-    update((current) => {
-      const product = current.products.find((p) => p.id === form.productId);
-      product.stocks[form.from] = (product.stocks[form.from] || 0) - qty;
-      product.stocks[form.to] = (product.stocks[form.to] || 0) + qty;
-      return { ...current, transfers: [...current.transfers, { id: uid("t"), productId: form.productId, quantity: qty, from: form.from, to: form.to, date: today }], ledger: [{ id: uid("m"), reference: `WH/INT/${String(current.ledger.length + 1).padStart(4, "0")}`, type: "Internal", contact: "Internal Transfer", status: "Done", date: today, from: locationLabel(current, form.from), to: locationLabel(current, form.to), productId: form.productId, quantity: qty, direction: "internal" }, ...current.ledger] };
-    });
-    setNotice("Transfer recorded. Source stock decreased and destination stock increased.");
-    setForm({ productId: "", quantity: "", from: "", to: "" });
+    try {
+      await inventoryApi.createTransfer({ product_id: Number(form.productId), source_location_id: Number(form.from), destination_location_id: Number(form.to), qty });
+      window.location.reload();
+    } catch (requestError) {
+      setError(requestError.response?.data?.detail || "Could not record the transfer.");
+    }
   };
   return <Page eyebrow="OPERATIONS / INTERNAL" title="Internal Transfers" description="Move stock between valid company locations without changing total stock." action={<span className="operation-rule">Every transfer is added to Move History</span>}>
     <div className="two-column"><section className="panel form-section"><div className="section-heading"><div><p className="eyebrow">NEW TRANSFER</p><h3>Move stock</h3><p className="muted">Product + Quantity + From + To</p></div></div><form onSubmit={submit} className="stack-form"><Field label="Product" required><select value={form.productId} onChange={change("productId")}><option value="">Select product</option>{state.products.map((p) => <option value={p.id} key={p.id}>{p.name} ({p.sku})</option>)}</select></Field><Field label="Quantity" required><input type="number" min="1" value={form.quantity} onChange={change("quantity")} placeholder="0" /></Field><Field label="From location" required><select value={form.from} onChange={change("from")}><option value="">Select source</option>{state.locations.map((l) => <option value={l.id} key={l.id}>{l.name} · {l.code}</option>)}</select></Field><Field label="To location" required><select value={form.to} onChange={change("to")}><option value="">Select destination</option>{state.locations.map((l) => <option value={l.id} key={l.id}>{l.name} · {l.code}</option>)}</select></Field>{error && <div className="form-error inline"><AlertTriangle size={16} />{error}</div>}{notice && <div className="form-success"><Check size={16} />{notice}</div>}<button className="button primary" type="submit"><ArrowLeftRight size={16} /> Record Transfer</button></form></section><section className="panel"><div className="panel-heading"><div><p className="eyebrow">RECENT MOVES</p><h3>Transfer history</h3></div></div><div className="simple-list">{state.transfers.length ? state.transfers.slice().reverse().map((t) => <div className="simple-row" key={t.id}><span className="direction-dot internal"><ArrowLeftRight size={13} /></span><div><strong>{state.products.find((p) => p.id === t.productId)?.name}</strong><small>{locationLabel(state, t.from)} → {locationLabel(state, t.to)}</small></div><b>{t.quantity}</b></div>) : <div className="empty-state">No internal transfers recorded yet.</div>}</div></section></div>
@@ -711,19 +741,18 @@ function Adjustments({ state, update }) {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const product = state.products.find((p) => p.id === form.productId);
-  const recorded = product?.stocks?.[form.locationId] ?? null;
+  const recorded = product && form.locationId ? (product.stocks?.[form.locationId] ?? 0) : null;
   const change = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault(); setError(""); setNotice("");
     const counted = Number(form.counted);
     if (!form.productId || !form.locationId || form.counted === "" || counted < 0) return setError("Select a product and location and enter a valid counted quantity.");
-    const delta = counted - recorded;
-    update((current) => {
-      const p = current.products.find((x) => x.id === form.productId); p.stocks[form.locationId] = counted;
-      return { ...current, adjustments: [...current.adjustments, { id: uid("a"), productId: form.productId, locationId: form.locationId, recorded, counted, delta, date: today }], ledger: [{ id: uid("m"), reference: `WH/ADJ/${String(current.ledger.length + 1).padStart(4, "0")}`, type: "Adjustment", contact: "Inventory Adjustment", status: "Done", date: today, from: "Stock record", to: locationLabel(current, form.locationId), productId: form.productId, quantity: Math.abs(delta), direction: delta >= 0 ? "in" : "out" }, ...current.ledger] };
-    });
-    setNotice(`Stock updated to ${counted}. Adjustment ${delta >= 0 ? "+" : ""}${delta} logged.`);
-    setForm({ productId: "", locationId: "", counted: "" });
+    try {
+      await inventoryApi.createAdjustment({ product_id: Number(form.productId), location_id: Number(form.locationId), counted_quantity: counted });
+      window.location.reload();
+    } catch (requestError) {
+      setError(requestError.response?.data?.detail || "Could not record the stock adjustment.");
+    }
   };
   return <Page eyebrow="OPERATIONS / INVENTORY" title="Inventory Adjustments" description="Reconcile recorded stock with a physical count." action={<span className="operation-rule">Adjustments are traceable in Move History</span>}>
     <div className="two-column"><section className="panel form-section"><div className="section-heading"><div><p className="eyebrow">NEW ADJUSTMENT</p><h3>Update physical count</h3><p className="muted">Recorded quantity becomes the counted quantity.</p></div></div><form onSubmit={submit} className="stack-form"><Field label="Product" required><select value={form.productId} onChange={change("productId")}><option value="">Select product</option>{state.products.map((p) => <option value={p.id} key={p.id}>{p.name} ({p.sku})</option>)}</select></Field><Field label="Location" required><select value={form.locationId} onChange={change("locationId")}><option value="">Select location</option>{state.locations.map((l) => <option value={l.id} key={l.id}>{l.name} · {l.code}</option>)}</select></Field><div className="count-preview"><span>Recorded quantity</span><strong>{recorded === null ? "—" : recorded}</strong></div><Field label="Counted quantity" required><input type="number" min="0" value={form.counted} onChange={change("counted")} placeholder="Enter physical count" /></Field>{recorded !== null && form.counted !== "" && <div className={`delta ${Number(form.counted) - recorded >= 0 ? "positive" : "negative"}`}>Adjustment: {Number(form.counted) - recorded >= 0 ? "+" : ""}{Number(form.counted) - recorded}</div>}{error && <div className="form-error inline"><AlertTriangle size={16} />{error}</div>}{notice && <div className="form-success"><Check size={16} />{notice}</div>}<button className="button primary" type="submit"><ClipboardCheck size={16} /> Apply Adjustment</button></form></section><section className="panel"><div className="panel-heading"><div><p className="eyebrow">ADJUSTMENT HISTORY</p><h3>Recent adjustments</h3></div></div><div className="simple-list">{state.adjustments.length ? state.adjustments.slice().reverse().map((a) => <div className="simple-row" key={a.id}><span className={`direction-dot ${a.delta >= 0 ? "in" : "out"}`}>{a.delta >= 0 ? <ArrowUpFromLine size={13} /> : <ArrowDownToLine size={13} />}</span><div><strong>{state.products.find((p) => p.id === a.productId)?.name}</strong><small>{locationLabel(state, a.locationId)} · {formatDate(a.date)}</small></div><b className={a.delta >= 0 ? "positive-text" : "negative-text"}>{a.delta >= 0 ? "+" : ""}{a.delta}</b></div>) : <div className="empty-state">No adjustments recorded yet.</div>}</div></section></div>
@@ -743,14 +772,14 @@ function MoveHistory({ state }) {
 function Warehouses({ state, update }) {
   const [form, setForm] = useState({ name: "", code: "", address: "" });
   const [error, setError] = useState("");
-  const submit = (e) => { e.preventDefault(); if (!form.name || !form.code || !form.address) return setError("Complete all warehouse fields."); if (state.warehouses.some((w) => w.code.toLowerCase() === form.code.toLowerCase())) return setError("Short Code must be unique."); update((current) => ({ ...current, warehouses: [...current.warehouses, { ...form, id: uid("wh"), code: form.code.toUpperCase() }] })); setForm({ name: "", code: "", address: "" }); setError(""); };
+  const submit = async (e) => { e.preventDefault(); if (!form.name || !form.code || !form.address) return setError("Complete all warehouse fields."); if (state.warehouses.some((w) => w.code.toLowerCase() === form.code.toLowerCase())) return setError("Short Code must be unique."); try { const w = await inventoryApi.createWarehouse({ name: form.name.trim(), short_code: form.code.toUpperCase(), address: form.address.trim() }); update((current) => ({ ...current, warehouses: [...current.warehouses, { id: String(w.id), name: w.name, code: w.short_code, address: w.address }] })); setForm({ name: "", code: "", address: "" }); setError(""); } catch (requestError) { setError(requestError.response?.data?.detail || "Could not save warehouse."); } };
   return <Page eyebrow="SETTINGS" title="Warehouses" description="Manage the warehouses used in operation references and stock visibility." action={<span className="operation-rule"><Building2 size={16} /> Multi-warehouse enabled</span>}><div className="two-column"><section className="panel"><div className="panel-heading"><div><p className="eyebrow">WAREHOUSE DIRECTORY</p><h3>{state.warehouses.length} warehouses</h3></div></div><div className="directory-list">{state.warehouses.map((w) => <div className="directory-row" key={w.id}><span className="document-icon neutral"><Building2 size={19} /></span><div><strong>{w.name}</strong><small><span className="mono">{w.code}</span> · {w.address}</small></div><ChevronRight size={16} /></div>)}</div></section><section className="panel form-section"><div className="section-heading"><div><p className="eyebrow">ADD WAREHOUSE</p><h3>New warehouse</h3></div></div><form onSubmit={submit} className="stack-form"><Field label="Name" required><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Warehouse name" /></Field><Field label="Short Code" required><input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="e.g. WH" maxLength="6" /></Field><Field label="Address" required><textarea value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} placeholder="Warehouse address" rows="3" /></Field>{error && <div className="form-error inline"><AlertTriangle size={16} />{error}</div>}<button className="button primary"><Plus size={16} /> Add Warehouse</button></form></section></div></Page>;
 }
 
 function Locations({ state, update }) {
   const [form, setForm] = useState({ name: "", code: "", warehouseId: "" });
   const [error, setError] = useState("");
-  const submit = (e) => { e.preventDefault(); if (!form.name || !form.code || !form.warehouseId) return setError("Complete all location fields."); update((current) => ({ ...current, locations: [...current.locations, { ...form, id: uid("loc"), code: form.code.toUpperCase() }] })); setForm({ name: "", code: "", warehouseId: "" }); setError(""); };
+  const submit = async (e) => { e.preventDefault(); if (!form.name || !form.code || !form.warehouseId) return setError("Complete all location fields."); try { const l = await inventoryApi.createLocation({ name: form.name.trim(), short_code: form.code.toUpperCase(), warehouse_id: Number(form.warehouseId) }); update((current) => ({ ...current, locations: [...current.locations, { id: String(l.id), name: l.name, code: l.short_code, warehouseId: String(l.warehouse_id) }] })); setForm({ name: "", code: "", warehouseId: "" }); setError(""); } catch (requestError) { setError(requestError.response?.data?.detail || "Could not save location."); } };
   return <Page eyebrow="SETTINGS" title="Locations" description="Manage stock-holding locations within each warehouse." action={<span className="operation-rule"><MapPin size={16} /> Location-aware stock</span>}><div className="two-column"><section className="panel"><div className="panel-heading"><div><p className="eyebrow">LOCATION DIRECTORY</p><h3>{state.locations.length} locations</h3></div></div><div className="directory-list">{state.locations.map((l) => <div className="directory-row" key={l.id}><span className="document-icon neutral"><MapPin size={19} /></span><div><strong>{l.name}</strong><small><span className="mono">{l.code}</span> · {state.warehouses.find((w) => w.id === l.warehouseId)?.name}</small></div><ChevronRight size={16} /></div>)}</div></section><section className="panel form-section"><div className="section-heading"><div><p className="eyebrow">ADD LOCATION</p><h3>New location</h3></div></div><form onSubmit={submit} className="stack-form"><Field label="Name" required><input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Location name" /></Field><Field label="Short Code" required><input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="e.g. RACK-A" /></Field><Field label="Warehouse" required><select value={form.warehouseId} onChange={(e) => setForm({ ...form, warehouseId: e.target.value })}><option value="">Select warehouse</option>{state.warehouses.map((w) => <option value={w.id} key={w.id}>{w.name} · {w.code}</option>)}</select></Field>{error && <div className="form-error inline"><AlertTriangle size={16} />{error}</div>}<button className="button primary"><Plus size={16} /> Add Location</button></form></section></div></Page>;
 }
 
@@ -792,7 +821,8 @@ function applyOperation(current, item, type) {
     ledger: [...item.lines.map((line, index) => ({ id: uid("m"), reference: item.reference, type: type === "receipt" ? "Receipt" : "Delivery", contact: item.contact, status: "Done", date: today, from: type === "receipt" ? "Vendor" : locationLabel(current, line.locationId), to: type === "receipt" ? locationLabel(current, line.locationId) : "Customer", productId: line.productId, quantity: line.quantity, direction: type === "receipt" ? "in" : "out" })), ...current.ledger],
   };
 }
-function totalStock(product) { return Object.values(product.stocks || {}).reduce((a, b) => a + b, 0); }
+function totalStock(product) { if (product.onHand !== undefined) return Number(product.onHand || 0); return Object.values(product.stocks || {}).reduce((a, b) => a + b, 0); }
+function productFromApi(p) { return { id: String(p.id), name: p.name, sku: p.code, category: p.category, uom: p.unit, cost: Number(p.cost_per_unit || 0), reorder: Number(p.reorder_point || 0), onHand: Number(p.on_hand || 0), freeToUse: Number(p.free_to_use ?? p.on_hand ?? 0), stocks: {} }; }
 function unique(values) { return [...new Set(values)]; }
 function locationLabel(state, id) { const location = state.locations.find((l) => l.id === id); const warehouse = state.warehouses.find((w) => w.id === location?.warehouseId); return location ? `${warehouse?.code || ""} / ${location.name}` : "Unknown location"; }
 function formatDate(date) { return new Date(`${date}T00:00:00`).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); }
