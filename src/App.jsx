@@ -1,3 +1,4 @@
+
 import React, { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
@@ -36,6 +37,8 @@ import {
   X,
 } from "lucide-react";
 import { Link, Navigate, Outlet, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
+import { authApi } from "./api";
+
 
 const today = new Date().toISOString().slice(0, 10);
 const uid = (prefix) => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -96,15 +99,52 @@ function App() {
     else localStorage.removeItem("stocksense-auth");
   }, [authenticated]);
 
-  const actions = useMemo(() => ({
-    login: () => setAuthenticated(true),
-    logout: () => setAuthenticated(false),
-    update: (updater) => setState((current) => {
-      const next = updater(clone(current));
-      return next;
+  useEffect(() => {
+    const token = localStorage.getItem("stocksense-token");
+    if (token) {
+      authApi
+        .me()
+        .then((user) => {
+          setState((cur) => ({
+            ...cur,
+            user: { ...cur.user, loginId: user.login_id, email: user.email, id: user.id },
+          }));
+          setAuthenticated(true);
+        })
+        .catch(() => {
+          localStorage.removeItem("stocksense-token");
+          localStorage.removeItem("stocksense-auth");
+          setAuthenticated(false);
+        });
+    }
+  }, []);
+
+  const actions = useMemo(
+    () => ({
+      login: (token, user) => {
+        if (token) localStorage.setItem("stocksense-token", token);
+        if (user) {
+          setState((current) => ({
+            ...current,
+            user: { ...current.user, loginId: user.login_id, email: user.email, id: user.id },
+          }));
+        }
+        setAuthenticated(true);
+      },
+      logout: () => {
+        localStorage.removeItem("stocksense-token");
+        localStorage.removeItem("stocksense-auth");
+        setAuthenticated(false);
+      },
+      update: (updater) =>
+        setState((current) => {
+          const next = updater(clone(current));
+          return next;
+        }),
+      reset: () => setState(clone(seedState)),
     }),
-    reset: () => setState(clone(seedState)),
-  }), []);
+    []
+  );
 
   return (
     <Routes>
@@ -141,25 +181,74 @@ function AuthPage({ type, onLogin, state, update }) {
   const isLogin = type === "login";
   const [form, setForm] = useState({ loginId: "", password: "", confirm: "", email: "" });
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
   const change = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }));
-  const submit = (event) => {
+
+  const submit = async (event) => {
     event.preventDefault();
     setError("");
+    setLoading(true);
+
     if (isLogin) {
-      if (form.loginId === state.user.loginId && form.password === (state.user.password || "Stocksense@2026")) {
-        onLogin();
+      try {
+        const res = await authApi.login(form.loginId, form.password);
+        localStorage.setItem("stocksense-token", res.access_token);
+        const me = await authApi.me();
+        onLogin(res.access_token, me);
         navigate("/dashboard");
-      } else setError("Invalid Login Id or Password");
+      } catch (err) {
+        const detail = err.response?.data?.detail;
+        if (typeof detail === "string") {
+          setError(detail);
+        } else if (Array.isArray(detail)) {
+          setError(detail.map((d) => d.msg).join(", "));
+        } else {
+          setError("Invalid Login Id or Password");
+        }
+      } finally {
+        setLoading(false);
+      }
       return;
     }
-    if (form.loginId.length < 6 || form.loginId.length > 12) return setError("Login Id must contain between 6 and 12 characters.");
-    if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*[^A-Za-z]).{9,}$/.test(form.password)) return setError("Password must be more than 8 characters and contain lowercase, uppercase, and a special character.");
-    if (form.password !== form.confirm) return setError("Password confirmation must match.");
-    if (!form.email.includes("@")) return setError("Enter a valid Email Id.");
-    update((current) => ({ ...current, user: { loginId: form.loginId, email: form.email, password: form.password } }));
-    onLogin();
-    navigate("/dashboard");
+
+    if (form.loginId.length < 6 || form.loginId.length > 12) {
+      setLoading(false);
+      return setError("Login Id must contain between 6 and 12 characters.");
+    }
+    if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*[^A-Za-z]).{9,}$/.test(form.password)) {
+      setLoading(false);
+      return setError("Password must be more than 8 characters and contain lowercase, uppercase, and a special character.");
+    }
+    if (form.password !== form.confirm) {
+      setLoading(false);
+      return setError("Password confirmation must match.");
+    }
+    if (!form.email.includes("@")) {
+      setLoading(false);
+      return setError("Enter a valid Email Id.");
+    }
+
+    try {
+      await authApi.signup(form.loginId, form.email, form.password);
+      const res = await authApi.login(form.loginId, form.password);
+      localStorage.setItem("stocksense-token", res.access_token);
+      const me = await authApi.me();
+      onLogin(res.access_token, me);
+      navigate("/dashboard");
+    } catch (err) {
+      const detail = err.response?.data?.detail;
+      if (typeof detail === "string") {
+        setError(detail);
+      } else if (Array.isArray(detail)) {
+        setError(detail.map((d) => d.msg).join(", "));
+      } else {
+        setError("Registration failed. Please check your details.");
+      }
+    } finally {
+      setLoading(false);
+    }
   };
+
   return (
     <div className="auth-layout">
       <div className="auth-brand-panel">
@@ -182,7 +271,9 @@ function AuthPage({ type, onLogin, state, update }) {
             <Field label="Password"><input type="password" value={form.password} onChange={change("password")} placeholder="Enter your password" autoComplete={isLogin ? "current-password" : "new-password"} required /></Field>
             {!isLogin && <Field label="Re-Enter Password"><input type="password" value={form.confirm} onChange={change("confirm")} placeholder="Confirm your password" required /></Field>}
             {error && <div className="form-error"><AlertTriangle size={16} />{error}</div>}
-            <button className="button primary full" type="submit">{isLogin ? "SIGN IN" : "SIGN UP"} <ArrowRight size={16} /></button>
+            <button className="button primary full" type="submit" disabled={loading}>
+              {loading ? (isLogin ? "SIGNING IN..." : "CREATING ACCOUNT...") : (isLogin ? "SIGN IN" : "SIGN UP")} <ArrowRight size={16} />
+            </button>
           </form>
           {isLogin ? <div className="auth-links"><Link to="/forgot-password">Forget Password ?</Link><span>New to StockSense? <Link to="/signup">Sign Up</Link></span></div> : <div className="auth-links centered"><span>Already have an account? <Link to="/login">Login</Link></span></div>}
           {isLogin && <p className="demo-hint">Demo access: manager01 / Stocksense@2026</p>}
@@ -197,19 +288,132 @@ function ForgotPassword() {
   const [step, setStep] = useState(1);
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleRequest = async (e) => {
+    e.preventDefault();
+    setError("");
+    setMessage("");
+    setLoading(true);
+    try {
+      const res = await authApi.requestReset(email);
+      setMessage(res.otp ? `Verification code sent! (OTP: ${res.otp})` : "A verification code has been sent.");
+      setStep(2);
+    } catch (err) {
+      const detail = err.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "Failed to request password reset.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerify = async (e) => {
+    e.preventDefault();
+    setError("");
+    setMessage("");
+    setLoading(true);
+    try {
+      await authApi.verifyReset(email, otp);
+      setMessage("OTP verified. Set a new password to finish.");
+      setStep(3);
+    } catch (err) {
+      const detail = err.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "Invalid verification code.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleConfirm = async (e) => {
+    e.preventDefault();
+    setError("");
+    setMessage("");
+    if (newPassword !== confirmPassword) {
+      return setError("Password confirmation must match.");
+    }
+    if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*[^A-Za-z]).{9,}$/.test(newPassword)) {
+      return setError("Password must be more than 8 characters and contain lowercase, uppercase, and a special character.");
+    }
+    setLoading(true);
+    try {
+      await authApi.confirmReset(email, otp, newPassword);
+      setMessage("Password reset complete. You can now sign in.");
+      setTimeout(() => navigate("/login"), 1000);
+    } catch (err) {
+      const detail = err.response?.data?.detail;
+      setError(typeof detail === "string" ? detail : "Failed to reset password.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="auth-layout">
-      <div className="auth-brand-panel"><div className="brand-mark large"><Boxes size={28} /></div><p className="eyebrow light">INVENTORY OPERATIONS</p><h1>StockSense</h1><p>Secure access to the stock that keeps your business moving.</p><div className="auth-rule" /><span className="auth-caption">Password recovery</span></div>
-      <main className="auth-form-panel"><div className="auth-form-wrap">
-        <div className="mobile-brand"><div className="brand-mark"><Boxes size={21} /></div><strong>StockSense</strong></div>
-        <p className="eyebrow">ACCOUNT ACCESS</p><h2>Reset your password</h2><p className="muted">Request a reset, verify the OTP, and set a new password.</p>
-        <div className="stepper compact"><span className={step >= 1 ? "active" : ""}>1<span>Request</span></span><i /><span className={step >= 2 ? "active" : ""}>2<span>Verify</span></span><i /><span className={step >= 3 ? "active" : ""}>3<span>Set new</span></span></div>
-        {step === 1 && <form className="auth-form" onSubmit={(e) => { e.preventDefault(); setMessage("A verification code has been sent."); setStep(2); }}><Field label="Email Id"><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@company.com" required /></Field><button className="button primary full">REQUEST RESET <ArrowRight size={16} /></button></form>}
-        {step === 2 && <form className="auth-form" onSubmit={(e) => { e.preventDefault(); setMessage("OTP verified. Set a new password to finish."); setStep(3); }}><Field label="Verification code"><input value={otp} onChange={(e) => setOtp(e.target.value)} placeholder="Enter the code" required /></Field><button className="button primary full">VERIFY OTP <ArrowRight size={16} /></button></form>}
-        {step === 3 && <form className="auth-form" onSubmit={(e) => { e.preventDefault(); setMessage("Password reset complete. You can now sign in."); setTimeout(() => navigate("/login"), 700); }}><Field label="New password"><input type="password" placeholder="Enter a new password" required /></Field><Field label="Re-Enter Password"><input type="password" placeholder="Confirm the new password" required /></Field><button className="button primary full">SET NEW PASSWORD <Check size={16} /></button></form>}
-        {message && <div className="form-success"><Check size={16} />{message}</div>}<div className="auth-links centered"><Link to="/login">Back to Login</Link></div>
-      </div></main>
+      <div className="auth-brand-panel">
+        <div className="brand-mark large"><Boxes size={28} /></div>
+        <p className="eyebrow light">INVENTORY OPERATIONS</p>
+        <h1>StockSense</h1>
+        <p>Secure access to the stock that keeps your business moving.</p>
+        <div className="auth-rule" />
+        <span className="auth-caption">Password recovery</span>
+      </div>
+      <main className="auth-form-panel">
+        <div className="auth-form-wrap">
+          <div className="mobile-brand"><div className="brand-mark"><Boxes size={21} /></div><strong>StockSense</strong></div>
+          <p className="eyebrow">ACCOUNT ACCESS</p>
+          <h2>Reset your password</h2>
+          <p className="muted">Request a reset, verify the OTP, and set a new password.</p>
+          <div className="stepper compact">
+            <span className={step >= 1 ? "active" : ""}>1<span>Request</span></span>
+            <i />
+            <span className={step >= 2 ? "active" : ""}>2<span>Verify</span></span>
+            <i />
+            <span className={step >= 3 ? "active" : ""}>3<span>Set new</span></span>
+          </div>
+          {step === 1 && (
+            <form className="auth-form" onSubmit={handleRequest}>
+              <Field label="Email Id">
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@company.com" required />
+              </Field>
+              {error && <div className="form-error"><AlertTriangle size={16} />{error}</div>}
+              <button className="button primary full" type="submit" disabled={loading}>
+                {loading ? "SENDING..." : "REQUEST RESET"} <ArrowRight size={16} />
+              </button>
+            </form>
+          )}
+          {step === 2 && (
+            <form className="auth-form" onSubmit={handleVerify}>
+              <Field label="Verification code">
+                <input value={otp} onChange={(e) => setOtp(e.target.value)} placeholder="Enter the 6-digit code" required />
+              </Field>
+              {error && <div className="form-error"><AlertTriangle size={16} />{error}</div>}
+              <button className="button primary full" type="submit" disabled={loading}>
+                {loading ? "VERIFYING..." : "VERIFY OTP"} <ArrowRight size={16} />
+              </button>
+            </form>
+          )}
+          {step === 3 && (
+            <form className="auth-form" onSubmit={handleConfirm}>
+              <Field label="New password">
+                <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Enter a new password" required />
+              </Field>
+              <Field label="Re-Enter Password">
+                <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Confirm the new password" required />
+              </Field>
+              {error && <div className="form-error"><AlertTriangle size={16} />{error}</div>}
+              <button className="button primary full" type="submit" disabled={loading}>
+                {loading ? "SAVING..." : "SET NEW PASSWORD"} <Check size={16} />
+              </button>
+            </form>
+          )}
+          {message && <div className="form-success"><Check size={16} />{message}</div>}
+          <div className="auth-links centered"><Link to="/login">Back to Login</Link></div>
+        </div>
+      </main>
     </div>
   );
 }
