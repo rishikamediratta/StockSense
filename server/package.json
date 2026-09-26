@@ -1,0 +1,14 @@
+{
+  "name": "stocksense-database",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "MongoDB/Mongoose persistence layer for StockSense",
+  "scripts": {
+    "db:check": "node scripts/check-connection.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "mongoose": "^8.9.5"
+  }
+}
